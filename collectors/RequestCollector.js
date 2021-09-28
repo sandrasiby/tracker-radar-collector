@@ -43,6 +43,8 @@ class RequestCollector extends BaseCollector {
          */
         this._unmatched = new Map();
         this._log = log;
+        this._unmatched_extra_resp_info = new Map();
+        this._unmatched_extra_req_info = new Map();
     }
 
     /**
@@ -56,6 +58,7 @@ class RequestCollector extends BaseCollector {
 
         await Promise.all([
             cdpClient.on('Network.requestWillBeSent', r => this.handleRequest(r, cdpClient)),
+            cdpClient.on('Network.requestWillBeSentExtraInfo', r => this.handleRequestWillBeSentExtraInfo(r)),
             cdpClient.on('Network.webSocketCreated', r => this.handleWebSocket(r)),
             cdpClient.on('Network.responseReceived', r => this.handleResponse(r)),
             cdpClient.on('Network.responseReceivedExtraInfo', r => this.handleResponseExtraInfo(r)),
@@ -115,6 +118,20 @@ class RequestCollector extends BaseCollector {
         const url = request.url;
         const method = request.method;
 
+        this._log("REQ", url, id);
+
+        let headers = this._unmatched_extra_req_info.get(id);
+        /*
+        if (headers){
+            this._log(Object.keys(headers).length, Object.keys(request.headers).length)
+            // this._log(response.url, "extrainfo_headers", typeof(headers), headers)
+            // this._log(response.url, "response.headers", typeof(response.headers), response.headers)
+        }
+        */
+
+        // request.responseHeaders = normalizeHeaders(headers ? headers: response.headers);
+        let requestHeaders = normalizeHeaders(headers ? headers: request.headers);
+
         // for CORS requests initiator is set incorrectly to 'parser', thankfully we can get proper initiator
         // from the corresponding OPTIONS request
         if (method !== 'OPTIONS' && initiator.type === 'parser') {
@@ -131,7 +148,7 @@ class RequestCollector extends BaseCollector {
         /**
          * @type {InternalRequestData}
          */
-        const requestData = {id, url, method, type, initiator, startTime};
+        const requestData = {id, url, method, type, initiator, startTime, requestHeaders};
 
         // if request A gets redirected to B which gets redirected to C chrome will produce 4 events:
         // requestWillBeSent(A) requestWillBeSent(B) requestWillBeSent(C) responseReceived()
@@ -222,6 +239,28 @@ class RequestCollector extends BaseCollector {
         if (!request.responseHeaders) {
             request.responseHeaders = normalizeHeaders(response.headers);
         }
+    }
+
+    /**
+     * Network.requestWillBeSentExtraInfo
+     * @param {{requestId: RequestId, associatedCookies: object, headers: object}} data
+     */
+    handleRequestWillBeSentExtraInfo(data) {
+        const {
+            requestId: id,
+            associatedCookies,
+            headers
+        } = data;
+        const request = this.findLastRequestWithId(id);
+        if (!request) {
+            // this._log('⚠️ unmatched extra REQ info', id, headers);
+            // this._log('⚠️ unmatched extra REQ, info', id, headers);
+            this._unmatched_extra_req_info.set(id, headers)
+            return;
+        }
+        // this._log("associatedCookies", associatedCookies)
+
+        request.requestHeaders = normalizeHeaders(headers);
     }
 
     /**
@@ -333,6 +372,7 @@ class RequestCollector extends BaseCollector {
                 status: request.status,
                 size: request.size,
                 remoteIPAddress: request.remoteIPAddress,
+                requestHeaders: request.requestHeaders,
                 responseHeaders: request.responseHeaders && filterHeaders(request.responseHeaders, this._saveHeaders),
                 responseBodyHash: request.responseBodyHash,
                 failureReason: request.failureReason,
@@ -356,6 +396,7 @@ module.exports = RequestCollector;
  * @property {string=} redirectedTo
  * @property {number=} status
  * @property {string} remoteIPAddress
+ * @property {object} requestHeaders
  * @property {object} responseHeaders
  * @property {string=} responseBodyHash
  * @property {string} failureReason
@@ -374,6 +415,7 @@ module.exports = RequestCollector;
  * @property {string=} redirectedTo
  * @property {number=} status
  * @property {string=} remoteIPAddress
+ * @property {Object<string,string>=} requestHeaders
  * @property {Object<string,string>=} responseHeaders
  * @property {string=} failureReason
  * @property {number=} size
